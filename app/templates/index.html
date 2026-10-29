@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if form.search_term %}{{ form.search_term }} · {% endif %}Job search</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Job search</h1>
+  <p class="muted">Searches job boards through python-jobspy. Runs locally; results are kept in memory for 15 minutes.</p>
+</header>
+
+{% if errors or notices %}
+<ul class="messages" role="alert">
+  {% for e in errors %}<li class="error">{{ e }}</li>{% endfor %}
+  {% for n in notices %}<li>{{ n }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+<form method="get" action="/" id="search">
+  <div class="field">
+    <label for="search_term">Search term</label>
+    <input id="search_term" name="search_term" value="{{ form.search_term or '' }}" required aria-describedby="term-hint">
+    <p class="hint" id="term-hint">Indeed searches descriptions too. Use "quotes" for exact phrases and -word to exclude. Example: "engineering intern" software -tax</p>
+  </div>
+
+  <div class="grid">
+    <div class="field">
+      <label for="location">Location</label>
+      <input id="location" name="location" value="{{ form.location or '' }}">
+    </div>
+    <div class="field">
+      <label for="results_wanted">Results wanted <span class="muted">per board</span></label>
+      <input id="results_wanted" name="results_wanted" type="number" min="1" max="{{ max_results }}" value="{{ form.results_wanted or '' }}">
+    </div>
+    <div class="field">
+      <label for="hours_old">Posted within <span class="muted">hours</span></label>
+      <input id="hours_old" name="hours_old" type="number" min="1" value="{{ form.hours_old or '' }}">
+    </div>
+    <div class="field">
+      <label for="job_type">Job type</label>
+      <select id="job_type" name="job_type">
+        <option value="">Any</option>
+        {% for t in job_types %}<option value="{{ t }}"{% if form.job_type == t %} selected{% endif %}>{{ t }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="checks">
+    <label><input type="checkbox" name="is_remote" value="1"{% if form.is_remote %} checked{% endif %}> Remote only</label>
+    {% if "fetch_description" in fields %}
+    <label><input type="checkbox" name="fetch_description" value="1"{% if form.fetch_description %} checked{% endif %}> Fetch full descriptions <span class="muted">(slower; LinkedIn is more likely to rate-limit you)</span></label>
+    {% endif %}
+  </div>
+
+  <fieldset>
+    <legend>Job boards</legend>
+    {% for name, hint in boards %}
+    <label><input type="checkbox" name="site_name" value="{{ name }}"{% if name in form.site_name %} checked{% endif %}> {{ name }} <span class="muted">{{ hint }}</span></label>
+    {% endfor %}
+  </fieldset>
+
+  <details{% if form.more_open %} open{% endif %}>
+    <summary>More options</summary>
+    <div class="grid">
+      {% if "country_indeed" in fields %}
+      <div class="field">
+        <label for="country_indeed">Country <span class="muted">Indeed, Glassdoor</span></label>
+        <select id="country_indeed" name="country_indeed" aria-describedby="country-hint">
+          <option value="">Default (USA)</option>
+          {% for name, gd in countries %}<option value="{{ name }}"{% if form.country_indeed == name %} selected{% endif %}>{{ name }}{% if gd %} *{% endif %}</option>{% endfor %}
+        </select>
+        <p class="hint" id="country-hint">* Glassdoor supports only the marked subset.</p>
+      </div>
+      {% endif %}
+      {% if "distance" in fields %}
+      <div class="field">
+        <label for="distance">Distance <span class="muted">miles</span></label>
+        <input id="distance" name="distance" type="number" min="1" value="{{ form.distance or '' }}">
+      </div>
+      {% endif %}
+      {% if "offset" in fields %}
+      <div class="field">
+        <label for="offset">Offset</label>
+        <input id="offset" name="offset" type="number" min="0" value="{{ form.offset or '' }}">
+      </div>
+      {% endif %}
+      {% if "linkedin_company_ids" in fields %}
+      <div class="field">
+        <label for="linkedin_company_ids">LinkedIn company IDs <span class="muted">comma-separated</span></label>
+        <input id="linkedin_company_ids" name="linkedin_company_ids" value="{{ form.linkedin_company_ids or '' }}">
+      </div>
+      {% endif %}
+      {% if "user_agent" in fields %}
+      <div class="field">
+        <label for="user_agent">User agent</label>
+        <input id="user_agent" name="user_agent" value="{{ form.user_agent or '' }}">
+      </div>
+      {% endif %}
+    </div>
+    <div class="checks">
+      {% if "easy_apply" in fields %}<label><input type="checkbox" name="easy_apply" value="1"{% if form.easy_apply %} checked{% endif %}> Easy apply only</label>{% endif %}
+      {% if "enforce_annual_salary" in fields %}<label><input type="checkbox" name="enforce_annual_salary" value="1"{% if form.enforce_annual_salary %} checked{% endif %}> Convert salaries to annual</label>{% endif %}
+    </div>
+  </details>
+
+  <button type="submit" class="primary">Search</button>
+</form>
+
+{% if outcome %}
+<section aria-labelledby="results-heading">
+  <h2 id="results-heading" class="count">
+    {{ outcome.records|length }} job{{ '' if outcome.records|length == 1 else 's' }} from {{ outcome.boards|join(', ') }}, in {{ '%.1f'|format(outcome.elapsed) }} s
+  </h2>
+  <p class="muted actions">
+    {% if outcome.from_cache %}Cached result from {{ cached_at }}. {% endif %}
+    {% if outcome.key %}<a href="{{ refresh_url }}">Search again, ignoring cache</a>{% endif %}
+    {% if outcome.key and outcome.records %} · <a href="/export.csv?key={{ outcome.key }}">Download CSV</a>{% endif %}
+  </p>
+
+  {% if diagnostics %}
+  <ul class="messages diagnostics">{% for d in diagnostics %}<li>{{ d }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if outcome.records %}
+  <ol class="results">
+    {% for r in outcome.records %}
+    <li>
+      <h3 class="title">{% if r.href %}<a href="{{ r.href }}" target="_blank" rel="noopener noreferrer">{{ r.title or 'Untitled' }}</a>{% else %}{{ r.title or 'Untitled' }}{% endif %}</h3>
+      {% if r.meta %}<p class="meta">{{ r.meta|join(' · ') }}</p>{% endif %}
+      <details>
+        <summary>Details</summary>
+        {% if r.description %}<div class="description">{{ r.description }}</div>
+        {% else %}<p class="muted">No description from this board. Enable 'Fetch full descriptions' to retrieve it.</p>{% endif %}
+        <dl>
+          {% for label, k in [('Skills', 'skills'), ('Emails', 'emails'), ('Experience', 'experience_range'), ('Industry', 'company_industry'), ('Employees', 'company_num_employees')] %}
+          {% if r[k] %}<dt>{{ label }}</dt><dd>{{ r[k] }}</dd>{% endif %}
+          {% endfor %}
+        </dl>
+        {% if r.direct_href or r.company_href %}
+        <p class="links">
+          {% if r.direct_href %}<a href="{{ r.direct_href }}" target="_blank" rel="noopener noreferrer">Apply link</a>{% endif %}
+          {% if r.company_href %}<a href="{{ r.company_href }}" target="_blank" rel="noopener noreferrer">Company page</a>{% endif %}
+        </p>
+        {% endif %}
+      </details>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty">No jobs found. Try a shorter query, a longer time window, fewer filters, or different boards.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<script>
+document.getElementById("search").addEventListener("submit", function () {
+  var b = this.querySelector("button[type=submit]");
+  b.disabled = true;
+  b.textContent = "Searching…";
+});
+window.addEventListener("pageshow", function () {
+  var b = document.querySelector("#search button[type=submit]");
+  b.disabled = false;
+  b.textContent = "Search";
+});
+</script>
+</body>
+</html>
